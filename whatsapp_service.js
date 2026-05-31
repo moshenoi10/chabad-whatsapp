@@ -6,7 +6,6 @@ const app = express();
 app.use(express.json({ limit: '50mb' }));
 
 const PORT = process.env.PORT || 3000;
-// בלי Disk – שמור בתיקיית הפרויקט
 const AUTH_PATH = path.join('/opt/render/project/src', '.wwebjs_auth');
 
 let clientReady = false;
@@ -16,6 +15,7 @@ const client = new Client({
     authStrategy: new LocalAuth({ dataPath: AUTH_PATH }),
     puppeteer: {
         headless: true,
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser',
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -46,7 +46,6 @@ client.on('disconnected', (reason) => {
 
 client.initialize();
 
-// סטטוס
 app.get('/', (req, res) => {
     res.json({ 
         status: clientReady ? 'ready' : 'not_ready',
@@ -54,11 +53,10 @@ app.get('/', (req, res) => {
     });
 });
 
-// QR
 app.get('/qr', (req, res) => {
     if (!lastQR) {
-        if (clientReady) return res.send('<h2 style="color:green">✅ WhatsApp כבר מחובר!</h2>');
-        return res.send('<h2>⏳ ממתין ל-QR... רענן בעוד 10 שניות</h2><script>setTimeout(()=>location.reload(),10000)</script>');
+        if (clientReady) return res.send('<h2 style="color:green;font-family:Arial;text-align:center;padding:40px">✅ WhatsApp כבר מחובר!</h2>');
+        return res.send('<h2 style="font-family:Arial;text-align:center;padding:40px">⏳ ממתין ל-QR... רענן בעוד 10 שניות</h2><script>setTimeout(()=>location.reload(),10000)</script>');
     }
     res.send(`<!DOCTYPE html>
 <html dir="rtl">
@@ -75,7 +73,6 @@ h2{color:#128C7E;}</style></head>
 </body></html>`);
 });
 
-// רשימת קבוצות
 app.get('/groups', async (req, res) => {
     if (!clientReady) return res.status(503).json({ error: 'לא מחובר' });
     try {
@@ -89,7 +86,6 @@ app.get('/groups', async (req, res) => {
     }
 });
 
-// שלח הודעה
 app.post('/send', async (req, res) => {
     if (!clientReady) return res.status(503).json({ error: 'WhatsApp לא מחובר' });
     const { to, message, image } = req.body;
