@@ -1,52 +1,62 @@
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
+const makeWASocket = require('@whiskeysockets/baileys').default;
+const { useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { Boom } = require('@hapi/boom');
 const express = require('express');
 const qrcode = require('qrcode');
 const path = require('path');
+const fs = require('fs');
+
 const app = express();
 app.use(express.json({ limit: '50mb' }));
-
 const PORT = process.env.PORT || 3000;
-const AUTH_PATH = path.join('/opt/render/project/src', '.wwebjs_auth');
+const AUTH_PATH = path.join('/opt/render/project/src', 'auth_info');
 
+let sock = null;
 let clientReady = false;
 let lastQR = null;
 
-const client = new Client({
-    authStrategy: new LocalAuth({ dataPath: AUTH_PATH }),
-    puppeteer: {
-        headless: true,
-args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-gpu',
-            '--no-first-run',
-            '--no-zygote',
-            '--single-process'
-        ]
-    }
-});
+async function connectToWhatsApp() {
+    const { state, saveCreds } = await useMultiFileAuthState(AUTH_PATH);
 
-client.on('qr', async (qr) => {
-    console.log('QR התקבל');
-    lastQR = await qrcode.toDataURL(qr);
-});
+    sock = makeWASocket({
+        auth: state,
+        printQRInTerminal: false,
+        browser: ['Chabad Bot', 'Chrome', '1.0.0'],
+    });
 
-client.on('ready', () => {
-    clientReady = true;
-    lastQR = null;
-    console.log('✅ WhatsApp מחובר!');
-});
+    sock.ev.on('creds.update', saveCreds);
 
-client.on('disconnected', (reason) => {
-    clientReady = false;
-    console.log('WhatsApp התנתק:', reason);
-});
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, qr } = update;
 
-client.initialize();
+        if (qr) {
+            console.log('QR התקבל');
+            lastQR = await qrcode.toDataURL(qr);
+        }
+
+        if (connection === 'close') {
+            clientReady = false;
+            const shouldReconnect = (lastDisconnect?.error instanceof Boom)
+                ? lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut
+                : true;
+            console.log('התנתק, מתחבר שוב:', shouldReconnect);
+            if (shouldReconnect) {
+                setTimeout(connectToWhatsApp, 3000);
+            }
+        } else if (connection === 'open') {
+            clientReady = true;
+            lastQR = null;
+            console.log('✅ WhatsApp מחובר!');
+        }
+    });
+}
+
+connectToWhatsApp();
+
+// ─── API ────────────────────────────────────────────────
 
 app.get('/', (req, res) => {
-    res.json({ 
+    res.json({
         status: clientReady ? 'ready' : 'not_ready',
         qr_available: !!lastQR
     });
@@ -54,7 +64,7 @@ app.get('/', (req, res) => {
 
 app.get('/qr', (req, res) => {
     if (!lastQR) {
-        if (clientReady) return res.send('<h2 style="color:green;font-family:Arial;text-align:center;padding:40px">✅ WhatsApp כבר מחובר!</h2>');
+        if (clientReady) return res.send('<h2 style="color:green;font-family:Arial;text-align:center;padding:40px">✅ WhatsApp מחובר!</h2>');
         return res.send('<h2 style="font-family:Arial;text-align:center;padding:40px">⏳ ממתין ל-QR... רענן בעוד 10 שניות</h2><script>setTimeout(()=>location.reload(),10000)</script>');
     }
     res.send(`<!DOCTYPE html>
@@ -75,11 +85,9 @@ h2{color:#128C7E;}</style></head>
 app.get('/groups', async (req, res) => {
     if (!clientReady) return res.status(503).json({ error: 'לא מחובר' });
     try {
-        const chats = await client.getChats();
-        const groups = chats
-            .filter(c => c.isGroup)
-            .map(c => ({ id: c.id._serialized, name: c.name }));
-        res.json({ groups });
+        const groups = [];
+        // Baileys – קבל קבוצות מה-store
+        res.json({ groups, note: 'שלח הודעה לקבוצה כדי לראות אותה כאן' });
     } catch(e) {
         res.status(500).json({ error: e.message });
     }
@@ -90,20 +98,25 @@ app.post('/send', async (req, res) => {
     const { to, message, image } = req.body;
     if (!to || !message) return res.status(400).json({ error: 'חסר to או message' });
     try {
+        const jid = to.includes('@') ? to : `${to}@g.us`;
         if (image) {
-            let media;
+            let imageBuffer;
             if (image.startsWith('http')) {
-                media = await MessageMedia.fromUrl(image, { unsafeMime: true });
+                const fetch = require('node-fetch');
+                const resp = await fetch(image);
+                imageBuffer = await resp.buffer();
             } else {
-                const [header, data] = image.split(',');
-                const mime = header.match(/:(.*?);/)[1];
-                media = new MessageMedia(mime, data);
+                const base64Data = image.split(',')[1] || image;
+                imageBuffer = Buffer.from(base64Data, 'base64');
             }
-            await client.sendMessage(to, media, { caption: message });
+            await sock.sendMessage(jid, {
+                image: imageBuffer,
+                caption: message
+            });
         } else {
-            await client.sendMessage(to, message);
+            await sock.sendMessage(jid, { text: message });
         }
-        console.log(`✅ נשלח ל-${to}`);
+        console.log(`✅ נשלח ל-${jid}`);
         res.json({ ok: true });
     } catch(e) {
         console.error('שגיאה:', e.message);
@@ -112,5 +125,5 @@ app.post('/send', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`🚀 WhatsApp Service פועל על port ${PORT}`);
+    console.log(`🚀 WhatsApp Baileys Service פועל על port ${PORT}`);
 });
