@@ -1,14 +1,15 @@
 {
   "name": "chabad-whatsapp-service",
-  "version": "1.0.0",
-  "description": "WhatsApp service for Chabad Bot",
-  "main": "whatsapp_service.js",
+  "version": "2.0.0",
+  "main": "whatsapp_baileys.js",
   "scripts": {
-    "start": "node whatsapp_service.js"
+    "start": "node whatsapp_baileys.js"
   },
   "dependencies": {
-    "whatsapp-web.js": "^1.23.0",
+    "@whiskeysockets/baileys": "^6.7.0",
+    "@hapi/boom": "^10.0.1",
     "express": "^4.18.2",
-    "qrcode": "^1.5.3"
+    "qrcode": "^1.5.3",
+    "node-fetch": "^2.7.0"
   }
 }
